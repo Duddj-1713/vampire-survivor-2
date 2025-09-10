@@ -45,14 +45,16 @@ class Enemy: #적 스탯 + 적 버프 적용 시 스탯 + 적 전용 AI or 로�
             'hp' : 100,
             'attack' : 20,
             'attack_speed' : 1.0,
-            'speed' : 7 
+            'speed' : 7,
+            'attack_range' : 10 
         }
         #적 버프 관련 딕셔너리
         self.buff = {
             'hp' : 0,
             'attack' : 0,
             'attack_speed' : 0.0,
-            'speed' : 0 
+            'speed' : 0 ,
+            'attack_range' : 0
         }
     def apply_buff(self, stat, value):
         self.buff[stat] += value
@@ -105,8 +107,8 @@ class Enemy: #적 스탯 + 적 버프 적용 시 스탯 + 적 전용 AI or 로�
                     self.world_x += dx * 2 #방향 * 2px 만큼 이동
                     self.world_y += dy * 2
 
-        self.rect.topleft = (self.world_x, self.world_y) #x, y좌표 업데이트
-
+        self.rect.topleft = (self.world_x, self.world_y) #x, y좌표 업데이트 
+            
     def draw_enemy(self, screen, pov_x, pov_y):
         screen_x = int(self.world_x - pov_x)
         screen_y = int(self.world_y - pov_y)
