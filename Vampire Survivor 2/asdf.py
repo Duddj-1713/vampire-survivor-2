@@ -3,21 +3,18 @@ import pygame, math, random, os
 pygame.init()
 
 class Player: #플레이어 스탯 + 플레이어 버프 적용 시 스탯   
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
         self.width, self.height = 50, 50
         # 플레이어 기본 스탯
         self.base_stat = {
             'hp' : 1000,
             'attack' : 20,
-            'attack_speed' : 1.0,
-            'speed' : 10 
+            'speed' : 10
         }
         #버프 관련 딕셔너리
         self.buff = {
             'hp' : 0,
             'attack' : 0,
-            'attack_speed' : 0.0,
             'speed' : 0 
         }
 
@@ -33,20 +30,121 @@ class Player: #플레이어 스탯 + 플레이어 버프 적용 시 스탯
             final_stat[key] = self.base_stat[key] + self.buff[key]
         return final_stat
 
-class Enemy: #적 스탯 + 적 버프 적용 시 스탯 + 적 전용 AI or 로직
-    def __init__(self, name, world_x, world_y, image):
-        self.name = name
+    def attacking(self):
+        pass
+
+class Weapon:
+    def __init__(self, attack_damage, attack_speed, attack_range):
+        self.attack_damage = attack_damage
+        self.attack_speed = attack_speed
+        self.attack_range = attack_range
+        self.last_attack = 0
+
+    def attack_able(self, current_time):
+        if self.attack_speed <= current_time - self.last_attack:
+            return True
+        else:
+            return False
+
+    def detect_closest_enemy(self, player_x, player_y, enemies):
+        if not enemies:
+            return None
+        
+        closest_enemy = min(
+            enemies,
+            key= lambda e: math.hypot(e.world_x - player_x, e.world_y - player_y)
+        )
+
+        distance = math.hypot(closest_enemy.world_x - player_x, closest_enemy.world_y - player_y)
+
+        if distance <= self.attack_range:  
+            return closest_enemy
+        else:
+            return None 
+
+class Sword(Weapon):
+    def __init__(self, attack_damage, attack_speed, attack_range, swing_angle, swing_image):
+        super().__init__(attack_damage, attack_speed, attack_range)
+        self.swing_image = swing_image
+        self.swing_angle = swing_angle
+        self.swing_duration = 100
+        self.swing_start_time = None
+        self.swing_angle_fixed = 0
+        self.swing_center_pos = None
+        self.attacking_flag = False
+
+    def detect_enemy(self, player_x, player_y, enemies, current_time):
+        if not self.attack_able(current_time):
+            return False
+
+        closest = self.detect_closest_enemy(player_x, player_y, enemies)
+        if not closest:
+            return False
+
+        # 공격 시점 좌표와 각도 저장
+        target_center_x = closest.world_x + closest.rect.width // 2
+        target_center_y = closest.world_y + closest.rect.height // 2
+        dx = target_center_x - player_x
+        dy = target_center_y - player_y
+        self.swing_angle_fixed = math.atan2(dy, dx)
+        self.swing_center_pos = (target_center_x, target_center_y)
+
+        self.last_attack = current_time
+        self.swing_start_time = current_time
+        self.attacking_flag = True
+
+        return True
+
+    def attack(self, enemies, player_world_x, player_world_y):
+        if not self.attacking_flag:
+            return
+
+        for enemy in enemies:
+            enemy_center_x = enemy.world_x + enemy.rect.width // 2
+            enemy_center_y = enemy.world_y + enemy.rect.height // 2
+            dx = enemy_center_x - player_world_x
+            dy = enemy_center_y - player_world_y
+            distance = math.hypot(dx, dy)
+
+            if distance <= self.attack_range:
+                enemy.take_damage(self.attack_damage)
+
+    def swing(self, screen, current_time, pov_x, pov_y):
+        if not self.attacking_flag or not self.swing_center_pos:
+            return
+
+        elapsed = current_time - self.swing_start_time
+        if elapsed >= self.swing_duration:
+            self.attacking_flag = False
+            self.swing_center_pos = None
+            self.swing_start_time = None
+            return
+
+        world_x, world_y = self.swing_center_pos
+        swing_x = world_x - pov_x
+        swing_y = world_y - pov_y
+
+        angle = -math.degrees(self.swing_angle_fixed)
+        rotated_image = pygame.transform.rotate(self.swing_image, angle)
+        rect = rotated_image.get_rect(center=(swing_x, swing_y))
+        screen.blit(rotated_image, rect)
+
+class Enemy:
+    def __init__(self, world_x, world_y, image):
         self.world_x = world_x
         self.world_y = world_y
         self.image = image
         self.rect = self.image.get_rect(topleft = (world_x, world_y))
+        self.last_attack_time = 0
+        self.state = 'moving'
+
         #적 기본 스탯
         self.base_stat = {
-            'hp' : 100,
+            'hp' : 50,
             'attack' : 20,
-            'attack_speed' : 1.0,
+            'attack_speed' : 3000,
             'speed' : 7,
-            'attack_range' : 10 
+            'attack_range' : 80
         }
         #적 버프 관련 딕셔너리
         self.buff = {
@@ -54,33 +152,53 @@ class Enemy: #적 스탯 + 적 버프 적용 시 스탯 + 적 전용 AI or 로�
             'attack' : 0,
             'attack_speed' : 0.0,
             'speed' : 0 ,
-            'attack_range' : 0
+            'attack_range' : 0,
+
         }
+    
+        self.current_stat = self.calc_final_stats()
+
+    def calc_final_stats(self):
+        result = {}
+        for key in self.base_stat:
+            result[key] = self.base_stat[key] + self.buff[key]
+        return result
+
+    def update_stats(self):
+        self.current_stat = self.calc_final_stats()
+
     def apply_buff(self, stat, value):
         self.buff[stat] += value
+        self.update_stats()
 
-    def remove_buff(self, stat): #버프 제거 함수
+    def remove_buff(self, stat):
         self.buff[stat] = 0
-
-    def final_stats(self):
-        final_stat = {}
-        for key in self.base_stat:
-            final_stat[key] = self.base_stat[key] + self.buff[key]
-        return final_stat
-
-    #플레이어한테 이동하는 로직
-    def move_toward(self, player_world_x, player_world_y, distance):
+        self.update_stats()
+    
+    def take_damage(self, attack_damage):
+        self.current_stat['hp'] -= attack_damage
+    
+    #플레이어한테 이동하는 로직 (+ 플레이어한테 돌진해서 공격하는 로직 추가)
+    def move_toward(self, player_stat, player_world_x, player_world_y, current_time):
         dx = player_world_x - self.world_x
         dy = player_world_y - self.world_y
-        length = math.hypot(dx, dy) #플레이어와의 거리 계산
+        length = math.hypot(dx, dy)
+        stats = self.current_stat
 
-        if length > distance: #거리가 distance보다 멀리 있을 때
+        if length > stats['attack_range']:
+            self.state = 'moving'
             dx /= length
             dy /= length
-            stats = self.final_stats()
             self.world_x += dx * stats['speed']
             self.world_y += dy * stats['speed']
 
+        elif length <= stats['attack_range']:
+            self.state = 'attacking'
+            if current_time - self.last_attack_time >= stats['attack_speed']:
+                player_stat['hp'] -= stats['attack']
+                self.last_attack_time = current_time
+
+        self.rect.topleft = (self.world_x, self.world_y)
 
     #적이 여러명 있는 경우 서로 밀려나는 함수
     def sep_enemies(self, enemies, player_rect = None): #적의 종류가 늘어나면 나중에 수정 필요
@@ -97,7 +215,7 @@ class Enemy: #적 스탯 + 적 버프 적용 시 스탯 + 적 전용 AI or 로�
                     self.world_x += dx * 2 #방향 * 2px 만큼 이동
                     self.world_y += dy * 2
 
-        if player_rect and self.rect.colliderect(player_rect):
+        if player_rect and self.rect.colliderect(player_rect) and not(self.state == 'attacking'):
                 dx = self.world_x - player_rect.centerx   
                 dy = self.world_y - player_rect.centery
                 length = math.hypot(dx, dy)
@@ -109,13 +227,125 @@ class Enemy: #적 스탯 + 적 버프 적용 시 스탯 + 적 전용 AI or 로�
 
         self.rect.topleft = (self.world_x, self.world_y) #x, y좌표 업데이트 
             
-    def draw_enemy(self, screen, pov_x, pov_y):
-        screen_x = int(self.world_x - pov_x)
-        screen_y = int(self.world_y - pov_y)
-        screen.blit(self.image, (screen_x, screen_y))
+    def draw_enemy(self, screen, pov_x, pov_y):        
+        if self.current_stat['hp'] > 0:
+            screen_x = int(self.world_x - pov_x)
+            screen_y = int(self.world_y - pov_y)
+            screen.blit(self.image, (screen_x, screen_y))
 
+class game:
+    def __init__(self):
+        self.screen = screen
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.clock = pygame.time.Clock()
+        self.current_time = 0
+
+        self.background = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Background.PNG'))
+        self.player_image = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Player.PNG'))
+        self.enemy_image = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Enemy.PNG'))
+        self.swing_image = pygame.transform.scale(pygame.image.load(os.path.join(BASE_DIR, 'images', 'Swing.PNG')), (80, 140))
+
+        self.player = Player()
+        self.player_stats = self.player.final_stats()
+        self.player_world_x = screen_w//2
+        self.player_world_y = screen_h//2
+
+        self.enemies = []
+        self.enemy_spawn_timer = 0
+        self.enemy_spawn_range = {'min':150,'max':600}
+        self.enemy_max_amount = 10 #적의 최대수
+
+        self.sword = Sword(25, 1000, 150, 90, self.swing_image)
+
+
+    def start(self):
+        global current_state
+
+        start_button_rect = pygame.Rect(400, 400, 400, 50)
+
+        pygame.draw.rect(self.screen, (0, 0, 0), [0, 0, 1200, 700])
+
+        if start_button_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(self.screen, (255, 255, 255), [400, 400, 400, 50])
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                current_state = 'running'
+
+        else:
+            pygame.draw.rect(self.screen, (255, 255, 255), [450, 410, 300, 30])
+
+    def update(self, dt):
+        dt = self.clock.tick(60) #매 프레임마다 지나는 시간 체크(ms)
+        self.current_time += dt
+        self.enemy_spawn_timer += dt
+
+        key_press = pygame.key.get_pressed() #WASD로 이동
+
+        dx, dy = 0, 0 #x, y축 방향으로 이동하는 방향 저장하는 변수
+    
+        if key_press[pygame.K_w]:
+            dy -= 1
+        if key_press[pygame.K_s]:
+            dy += 1
+        if key_press[pygame.K_a]:
+            dx -= 1
+        if key_press[pygame.K_d]:
+            dx += 1
+
+        if dx != 0 or dy != 0: #대각선으로 이동시에 루트2로 나눔
+            length = (dx**2 + dy**2) ** 0.5
+            dx /= length
+            dy /= length
+
+        self.player_world_x += dx * self.player_stats['speed'] #방향 + 속도
+        self.player_world_y += dy * self.player_stats['speed']
+
+        self.pov_x = self.player_world_x - screen_w // 2 + 25
+        self.pov_y = self.player_world_y - screen_h // 2 + 25
+
+        if self.enemy_spawn_timer >= 200 and len(self.enemies) < self.enemy_max_amount: #적의 최대치보다 적을시, 적이 스폰되는 지점 정하기
+            self.enemy_spawn_timer = 0 #타이머 리셋
+
+            #플레이어로부터 x축 방향으로 100 ~ 300px만큼 떨어진 위치로 x좌표 설정
+            enemy_x = self.player_world_x + random.choice([-1, 1]) * random.randint(self.enemy_spawn_range['min'], self.enemy_spawn_range['max'])
+            #플레이어로부터 y축 방향으로 100 ~ 300px만큼 떨어진 위치로 y좌표 설정
+            enemy_y = self.player_world_y + random.choice([-1, 1]) * random.randint(self.enemy_spawn_range['min'], self.enemy_spawn_range['max'])
+
+            self.enemies.append(Enemy(enemy_x, enemy_y, self.enemy_image)) #enemies 리스트에 적 추가
+
+    def player_attack(self):
+        if self.sword.detect_enemy(self.player_world_x, self.player_world_y, self.enemies, self.current_time):
+            self.sword.attack(self.enemies, self.player_world_x, self.player_world_y)
+
+
+    def del_enemies(self):
+        for i in range(len(self.enemies)-1, -1, -1):
+            if self.enemies[i].current_stat['hp'] <= 0:
+                del self.enemies[i]
+    
+    def draw(self):
+        # 무한 반복하는 배경 그리기
+        for x in range(-screen_w, screen_w + screen_w, screen_w):
+            for y in range(-screen_h, screen_h + screen_h, screen_h):
+                self.screen.blit(self.background, (x - (self.pov_x % screen_w), y - (self.pov_y % screen_h)))
+
+        # 플레이어 그리기 (화면 중앙)
+        self.screen.blit(self.player_image, (screen_w // 2 - 25, screen_h // 2 - 25))
+
+        player_rect = pygame.Rect(self.player_world_x, self.player_world_y, self.player.width, self.player.height) #플레이어의 좌표, 너비, 높이가 담긴 직사각형 정보
+        #모든 적 그리기
+        for enemy in self.enemies:
+            enemy.move_toward(self.player_stats, self.player_world_x, self.player_world_y, self.current_time) #플레이어한테 이동하는 함수 모든 적에게 실행
+            enemy.draw_enemy(self.screen, self.pov_x, self.pov_y) #적 그리는 함수 실행
+            enemy.sep_enemies(self.enemies, player_rect) #적끼리 서로 충돌할때 서로 멀어지는 함수 실행
+
+        self.sword.swing(self.screen, self.current_time, self.pov_x, self.pov_y)
+
+        pygame.draw.rect(self.screen, (255, 0, 0), [0, 0, self.player_stats['hp'], 50]) #hp바 생성
 
 BASE_DIR = os.path.dirname(__file__)
+
+current_state = 'start'
 
 screen_w = 1200 #화면 가로
 screen_h = 700 #화면 세로
@@ -125,7 +355,7 @@ player_x = screen_w // 2 - 50
 player_y = screen_h // 2 - 50
 
 #플레이어한테 기본 스탯 부여
-player = Player('플레이어')
+player = Player()
 player_stats = player.final_stats()
 
 #플레이어의 실제 월드 좌표
@@ -139,75 +369,29 @@ enemy_max_amount = 10 #적의 최대수
 
 screen = pygame.display.set_mode((screen_w, screen_h))
 
-background = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Background.PNG'))
-player_image = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Player.PNG'))
-enemy_image = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Enemy.PNG'))
-
+current_time = 0
 pygame.display.set_caption('Vampire Survivor 2') #게임 이름, 나중에 변경
 
 clock = pygame.time.Clock() #프레임 조절
+Game = game()
 
-game_running = True
-while game_running:
+running = True
+
+while running:
+    dt = Game.clock.tick(60)
+
     for event in pygame.event.get():
-        if event.type == pygame.QUIT: #창 닫기 이벤트 발생
-            game_running = False
-    
-    dt = clock.tick(60) #매 프레임마다 지나는 시간 체크(ms)
-    enemy_spawn_timer += dt
+        if event.type == pygame.QUIT:
+            running = False
 
-    key_press = pygame.key.get_pressed() #WASD로 이동
+    if current_state == 'start':
+        Game.start()
+    elif current_state == 'running':
+        Game.update(dt)
+        Game.player_attack()
+        Game.del_enemies()
+        Game.draw()
 
-    dx, dy = 0, 0 #x, y축 방향으로 이동하는 방향 저장하는 변수
-    
-    if key_press[pygame.K_w]:
-        dy -= 1
-    if key_press[pygame.K_s]:
-        dy += 1
-    if key_press[pygame.K_a]:
-        dx -= 1
-    if key_press[pygame.K_d]:
-        dx += 1
-
-    if dx != 0 or dy != 0: #대각선으로 이동시에 루트2로 나눔
-        length = (dx**2 + dy**2) ** 0.5
-        dx /= length
-        dy /= length
-
-    player_world_x += dx * player_stats['speed'] #방향 + 속도
-    player_world_y += dy * player_stats['speed']
-
-    pov_x = player_world_x - screen_w // 2 + 25
-    pov_y = player_world_y - screen_h // 2 + 25
-
-    if enemy_spawn_timer >= 200 and len(enemies) < enemy_max_amount: #적의 최대치보다 적을시, 적이 스폰되는 지점 정하기
-        enemy_spawn_timer = 0 #타이머 리셋
-
-        #플레이어로부터 x축 방향으로 100 ~ 300px만큼 떨어진 위치로 x좌표 설정
-        enemy_x = player_world_x + random.choice([-1, 1]) * random.randint(enemy_spawn_range['min'], enemy_spawn_range['max'])
-        #플레이어로부터 y축 방향으로 100 ~ 300px만큼 떨어진 위치로 y좌표 설정
-        enemy_y = player_world_y + random.choice([-1, 1]) * random.randint(enemy_spawn_range['min'], enemy_spawn_range['max'])
-
-        enemies.append(Enemy('적', enemy_x, enemy_y, enemy_image)) #enemies 리스트에 적 추가
-
-    # 무한 반복하는 배경 그리기
-    for x in range(-screen_w, screen_w + screen_w, screen_w):
-        for y in range(-screen_h, screen_h + screen_h, screen_h):
-            screen.blit(background, (x - (pov_x % screen_w), y - (pov_y % screen_h)))
-
-    # 플레이어 그리기 (화면 중앙)
-    screen.blit(player_image, (screen_w // 2 - 25, screen_h // 2 - 25))
-
-    player_rect = pygame.Rect(player_world_x, player_world_y, player.width, player.height) #플레이어의 좌표, 너비, 높이가 담긴 직사각형 정보
-    #모든 적 그리기
-    for enemy in enemies:
-        enemy.move_toward(player_world_x, player_world_y, 50 * math.sqrt(2)) #플레이어한테 이동하는 함수 모든 적에게 실행
-        enemy.draw_enemy(screen, pov_x, pov_y) #적 그리는 함수 실행
-        enemy.sep_enemies(enemies, player_rect) #적끼리 서로 충돌할때 서로 멀어지는 함수 실행
-
-    #화면 전체 새로고침
     pygame.display.flip()
-
-    clock.tick(60) #60프레임 고정
 
 pygame.quit()
