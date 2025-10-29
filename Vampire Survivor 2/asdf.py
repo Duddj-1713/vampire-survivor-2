@@ -40,97 +40,127 @@ class Weapon:
         self.attack_range = attack_range
         self.last_attack = 0
 
-    def attack_able(self, current_time):
-        if self.attack_speed <= current_time - self.last_attack:
-            return True
-        else:
-            return False
-
-    def detect_closest_enemy(self, player_x, player_y, enemies):
-        if not enemies:
+    def detect_enemy(self, player_x, player_y, enemies, current_time):
+        if current_time - self.last_attack < self.attack_speed or not enemies:
             return None
-        
+
+        # 가장 가까운 적 선택
         closest_enemy = min(
             enemies,
-            key= lambda e: math.hypot(e.world_x - player_x, e.world_y - player_y)
+            key=lambda e: math.hypot(e.world_x - player_x, e.world_y - player_y)
         )
+        distance = math.hypot(closest_enemy.world_x - player_x,
+                              closest_enemy.world_y - player_y)
 
-        distance = math.hypot(closest_enemy.world_x - player_x, closest_enemy.world_y - player_y)
-
-        if distance <= self.attack_range:  
-            return closest_enemy
-        else:
-            return None 
-
-class Sword(Weapon):
-    def __init__(self, attack_damage, attack_speed, attack_range, swing_angle, swing_image):
-        super().__init__(attack_damage, attack_speed, attack_range)
-        self.swing_image = swing_image
-        self.swing_angle = swing_angle
-        self.swing_duration = 100
-        self.swing_start_time = None
-        self.swing_angle_fixed = 0
-        self.swing_center_pos = None
-        self.attacking_flag = False
-
-    def detect_enemy(self, player_x, player_y, enemies, current_time):
-        if not self.attack_able(current_time):
-            return False
-
-        closest = self.detect_closest_enemy(player_x, player_y, enemies)
-        if not closest:
-            return False
-
-        # 공격 시점 좌표와 각도 저장
-        target_center_x = closest.world_x + closest.rect.width // 2
-        target_center_y = closest.world_y + closest.rect.height // 2
-        dx = target_center_x - player_x
-        dy = target_center_y - player_y
-        self.swing_angle_fixed = math.atan2(dy, dx)
-        self.swing_center_pos = (target_center_x, target_center_y)
+        if distance > self.attack_range:
+            return None
 
         self.last_attack = current_time
-        self.swing_start_time = current_time
-        self.attacking_flag = True
+        return closest_enemy 
 
-        return True
+import pygame, math
 
-    def attack(self, enemies, player_world_x, player_world_y):
+import pygame, math
+
+import pygame, math
+
+class Sword:
+    def __init__(self, swing_images, attack_damage, attack_speed, attack_range):
+        self.swing_images = swing_images
+        self.attack_damage = attack_damage
+        self.attack_speed = attack_speed
+        self.attack_range = attack_range
+        self.last_attack = 0
+
+        self.attacking_flag = False
+        self.swing_start_time = 0
+        self.base_angle = 0
+        self.target = None
+
+        # 휘두르는 각도 구간 (0.5초 정도)
+        self.angle_ranges = [(0, 35), (35, 90), (90, 150)]
+        self.frame_times = [200, 170, 130]
+        self.total_duration = sum(self.frame_times)
+
+    def detect_enemy(self, player_x, player_y, enemies, current_time):
+        if current_time - self.last_attack < self.attack_speed or not enemies:
+            return None
+
+        closest_enemy = min(
+            enemies,
+            key=lambda e: math.hypot(e.world_x - player_x, e.world_y - player_y)
+        )
+        distance = math.hypot(closest_enemy.world_x - player_x,
+                              closest_enemy.world_y - player_y)
+
+        if distance > self.attack_range:
+            return None
+
+        return closest_enemy
+
+    def attack(self, player_world_x, player_world_y, enemies):
+        current_time = pygame.time.get_ticks()
+        if self.attacking_flag:
+            return  # 이미 공격 중이면 무시
+
+        target = self.detect_enemy(player_world_x, player_world_y, enemies, current_time)
+        if target:
+            # 공격 각도 (플레이어 → 적 방향)
+            dx = target.world_x - player_world_x
+            dy = target.world_y - player_world_y
+            self.base_angle = math.degrees(math.atan2(-dy, dx))
+            self.target = target
+            target.take_damage(self.attack_damage)
+
+            # 공격 시작
+            self.attacking_flag = True
+            self.swing_start_time = current_time
+            self.last_attack = current_time
+
+    def swing(self, screen, current_time, player_world_x, player_world_y, pov_x, pov_y):
         if not self.attacking_flag:
             return
 
-        for enemy in enemies:
-            enemy_center_x = enemy.world_x + enemy.rect.width // 2
-            enemy_center_y = enemy.world_y + enemy.rect.height // 2
-            dx = enemy_center_x - player_world_x
-            dy = enemy_center_y - player_world_y
-            distance = math.hypot(dx, dy)
-
-            if distance <= self.attack_range:
-                enemy.take_damage(self.attack_damage)
-
-    def swing(self, screen, current_time, pov_x, pov_y):
-        if not self.attacking_flag or not self.swing_center_pos:
-            return
-
         elapsed = current_time - self.swing_start_time
-        if elapsed >= self.swing_duration:
+        if elapsed >= self.total_duration:
             self.attacking_flag = False
-            self.swing_center_pos = None
-            self.swing_start_time = None
             return
 
-        world_x, world_y = self.swing_center_pos
-        swing_x = world_x - pov_x
-        swing_y = world_y - pov_y
+        # 현재 프레임과 각도 계산
+        frame_index = 0
+        accumulated_time = 0
+        for i, t in enumerate(self.frame_times):
+            accumulated_time += t
+            if elapsed <= accumulated_time:
+                frame_index = i
+                break
 
-        angle = -math.degrees(self.swing_angle_fixed)
-        rotated_image = pygame.transform.rotate(self.swing_image, angle)
-        rect = rotated_image.get_rect(center=(swing_x, swing_y))
+        frame_elapsed = elapsed - sum(self.frame_times[:frame_index])
+        angle_start, angle_end = self.angle_ranges[frame_index]
+        swing_angle = angle_start + (angle_end - angle_start) * (frame_elapsed / self.frame_times[frame_index])
+        total_angle = self.base_angle - swing_angle
+
+        current_image = self.swing_images[frame_index]
+        rotated_image = pygame.transform.rotate(current_image, total_angle)
+
+        # === 여기 중요 ===
+        # 플레이어의 화면상 중심 좌표
+        screen_x = player_world_x - pov_x
+        screen_y = player_world_y - pov_y
+
+        # 중심이 진짜 중앙에 맞는지 보기 위해 원 찍기
+        pygame.draw.circle(screen, (255, 0, 0), (int(screen_x), int(screen_y)), 5)
+
+        rect = rotated_image.get_rect(center=(screen_x, screen_y + 70))
         screen.blit(rotated_image, rect)
 
-class Enemy:
+        # 이미지 영역 확인용 박스
+        pygame.draw.rect(screen, (0, 255, 0), rect, 2)
+
+
+class Enemy(pygame.sprite.Sprite):
     def __init__(self, world_x, world_y, image):
+        super().__init__()
         self.world_x = world_x
         self.world_y = world_y
         self.image = image
@@ -145,38 +175,18 @@ class Enemy:
             'attack_speed' : 3000,
             'speed' : 7,
             'attack_range' : 80
-        }
-        #적 버프 관련 딕셔너리
-        self.buff = {
-            'hp' : 0,
-            'attack' : 0,
-            'attack_speed' : 0.0,
-            'speed' : 0 ,
-            'attack_range' : 0,
+        } 
 
-        }
-    
         self.current_stat = self.calc_final_stats()
-
+    
     def calc_final_stats(self):
-        result = {}
-        for key in self.base_stat:
-            result[key] = self.base_stat[key] + self.buff[key]
-        return result
+        return(self.base_stat)
+        #이후에 난이도, 버프, 고난 등 다양한 기능 추가시 업뎃할 예정
 
-    def update_stats(self):
-        self.current_stat = self.calc_final_stats()
-
-    def apply_buff(self, stat, value):
-        self.buff[stat] += value
-        self.update_stats()
-
-    def remove_buff(self, stat):
-        self.buff[stat] = 0
-        self.update_stats()
-    
     def take_damage(self, attack_damage):
         self.current_stat['hp'] -= attack_damage
+        if self.current_stat['hp'] <= 0:
+            self.kill() #스스로 그룹에서 제거
     
     #플레이어한테 이동하는 로직 (+ 플레이어한테 돌진해서 공격하는 로직 추가)
     def move_toward(self, player_stat, player_world_x, player_world_y, current_time):
@@ -198,6 +208,7 @@ class Enemy:
                 player_stat['hp'] -= stats['attack']
                 self.last_attack_time = current_time
 
+        #rect 업뎃
         self.rect.topleft = (self.world_x, self.world_y)
 
     #적이 여러명 있는 경우 서로 밀려나는 함수
@@ -205,7 +216,7 @@ class Enemy:
         for other in enemies:
             if other is self: #감지되는 것이 자신인지 판단하기
                 continue
-            elif self.rect.colliderect(other.rect): #서로 충돌했나 감지
+            if self.rect.colliderect(other.rect): #서로 충돌했나 감지
                 dx = self.world_x - other.world_x #서로 x, y가 얼마나 떨어졌는지 구하기
                 dy = self.world_y - other.world_y
                 length = math.hypot(dx, dy)
@@ -244,7 +255,21 @@ class game:
         self.background = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Background.PNG'))
         self.player_image = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Player.PNG'))
         self.enemy_image = pygame.image.load(os.path.join(BASE_DIR, 'images', 'Enemy.PNG'))
-        self.swing_image = pygame.transform.scale(pygame.image.load(os.path.join(BASE_DIR, 'images', 'Swing.PNG')), (80, 140))
+        self.swing_images = [
+        pygame.transform.scale(
+            pygame.image.load(os.path.join(BASE_DIR, 'images', 'sword1.PNG')).convert_alpha(),
+            (280, 280)
+        ),
+        pygame.transform.scale(
+            pygame.image.load(os.path.join(BASE_DIR, 'images', 'sword2.PNG')).convert_alpha(),
+            (280, 280)
+        ),
+        pygame.transform.scale(
+            pygame.image.load(os.path.join(BASE_DIR, 'images', 'sword3.PNG')).convert_alpha(),
+            (280, 280)
+        )
+        ]
+
 
         self.player = Player()
         self.player_stats = self.player.final_stats()
@@ -256,7 +281,7 @@ class game:
         self.enemy_spawn_range = {'min':150,'max':600}
         self.enemy_max_amount = 10 #적의 최대수
 
-        self.sword = Sword(25, 1000, 150, 90, self.swing_image)
+        self.sword = Sword(self.swing_images, attack_damage=20, attack_speed=500, attack_range=150)
 
 
     def start(self):
@@ -314,15 +339,18 @@ class game:
             self.enemies.append(Enemy(enemy_x, enemy_y, self.enemy_image)) #enemies 리스트에 적 추가
 
     def player_attack(self):
-        if self.sword.detect_enemy(self.player_world_x, self.player_world_y, self.enemies, self.current_time):
-            self.sword.attack(self.enemies, self.player_world_x, self.player_world_y)
+        self.sword.attack(self.player_world_x, self.player_world_y, self.enemies)
+        self.sword.swing(
+            self.screen,
+            pygame.time.get_ticks(),
+            self.player_world_x,
+            self.player_world_y,
+            self.pov_x,
+            self.pov_y
+            )
 
 
-    def del_enemies(self):
-        for i in range(len(self.enemies)-1, -1, -1):
-            if self.enemies[i].current_stat['hp'] <= 0:
-                del self.enemies[i]
-    
+
     def draw(self):
         # 무한 반복하는 배경 그리기
         for x in range(-screen_w, screen_w + screen_w, screen_w):
@@ -338,8 +366,6 @@ class game:
             enemy.move_toward(self.player_stats, self.player_world_x, self.player_world_y, self.current_time) #플레이어한테 이동하는 함수 모든 적에게 실행
             enemy.draw_enemy(self.screen, self.pov_x, self.pov_y) #적 그리는 함수 실행
             enemy.sep_enemies(self.enemies, player_rect) #적끼리 서로 충돌할때 서로 멀어지는 함수 실행
-
-        self.sword.swing(self.screen, self.current_time, self.pov_x, self.pov_y)
 
         pygame.draw.rect(self.screen, (255, 0, 0), [0, 0, self.player_stats['hp'], 50]) #hp바 생성
 
@@ -389,7 +415,6 @@ while running:
     elif current_state == 'running':
         Game.update(dt)
         Game.player_attack()
-        Game.del_enemies()
         Game.draw()
 
     pygame.display.flip()
